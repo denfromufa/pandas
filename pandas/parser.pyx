@@ -137,7 +137,7 @@ cdef extern from "parser/tokenizer.h":
         int quoting                # style of quoting to write */
 
         # hmm =/
-        int numeric_field
+#        int numeric_field
 
         char commentchar
         int allow_embedded_newline
@@ -175,7 +175,7 @@ cdef extern from "parser/tokenizer.h":
         int col
 
     void coliter_setup(coliter_t *it, parser_t *parser, int i, int start)
-    char* COLITER_NEXT(coliter_t it)
+    void COLITER_NEXT(coliter_t, const char *)
 
     parser_t* parser_new()
 
@@ -198,7 +198,7 @@ cdef extern from "parser/tokenizer.h":
 
     int64_t str_to_int64(char *p_item, int64_t int_min,
                          int64_t int_max, int *error, char tsep)
-    uint64_t str_to_uint64(char *p_item, uint64_t uint_max, int *error)
+#    uint64_t str_to_uint64(char *p_item, uint64_t uint_max, int *error)
 
     double xstrtod(const char *p, char **q, char decimal, char sci,
                    char tsep, int skip_trailing)
@@ -207,12 +207,12 @@ cdef extern from "parser/tokenizer.h":
     double round_trip(const char *p, char **q, char decimal, char sci,
                    char tsep, int skip_trailing)
 
-    inline int to_complex(char *item, double *p_real,
-                          double *p_imag, char sci, char decimal)
+#    inline int to_complex(char *item, double *p_real,
+#                          double *p_imag, char sci, char decimal)
     inline int to_longlong(char *item, long long *p_value)
-    inline int to_longlong_thousands(char *item, long long *p_value,
-                                     char tsep)
-    inline int to_boolean(char *item, uint8_t *val)
+#    inline int to_longlong_thousands(char *item, long long *p_value,
+#                                     char tsep)
+    int to_boolean(const char *item, uint8_t *val)
 
 
 cdef extern from "parser/io.h":
@@ -540,6 +540,17 @@ cdef class TextReader:
 
         self.parser.cb_io = NULL
         self.parser.cb_cleanup = NULL
+
+        if self.compression == 'infer':
+            if isinstance(source, basestring):
+                if source.endswith('.gz'):
+                    self.compression = 'gzip'
+                elif source.endswith('.bz2'):
+                    self.compression = 'bz2'
+                else:
+                    self.compression = None
+            else:
+                self.compression = None
 
         if self.compression:
             if self.compression == 'gzip':
@@ -1055,14 +1066,16 @@ cdef class TextReader:
                              bint user_dtype,
                              kh_str_t *na_hashset,
                              object na_flist):
-        cdef kh_str_t *true_set, *false_set
+        cdef kh_str_t *true_set
+        cdef kh_str_t *false_set
 
         if dtype[1] == 'i' or dtype[1] == 'u':
             result, na_count = _try_int64(self.parser, i, start, end,
                                           na_filter, na_hashset)
             if user_dtype and na_count is not None:
                 if na_count > 0:
-                    raise Exception('Integer column has NA values')
+                    raise Exception("Integer column has NA values in "
+                                    "column {column}".format(column=i))
 
             if result is not None and dtype[1:] != 'i8':
                 result = result.astype(dtype)
@@ -1278,7 +1291,7 @@ cdef _string_box_factorize(parser_t *parser, int col,
         Py_ssize_t i
         size_t lines
         coliter_t it
-        char *word
+        const char *word = NULL
         ndarray[object] result
 
         int ret = 0
@@ -1295,7 +1308,7 @@ cdef _string_box_factorize(parser_t *parser, int col,
     coliter_setup(&it, parser, col, line_start)
 
     for i in range(lines):
-        word = COLITER_NEXT(it)
+        COLITER_NEXT(it, word)
 
         if na_filter:
             k = kh_get_str(na_hashset, word)
@@ -1332,7 +1345,7 @@ cdef _string_box_utf8(parser_t *parser, int col,
         Py_ssize_t i
         size_t lines
         coliter_t it
-        char *word
+        const char *word = NULL
         ndarray[object] result
 
         int ret = 0
@@ -1349,7 +1362,7 @@ cdef _string_box_utf8(parser_t *parser, int col,
     coliter_setup(&it, parser, col, line_start)
 
     for i in range(lines):
-        word = COLITER_NEXT(it)
+        COLITER_NEXT(it, word)
 
         if na_filter:
             k = kh_get_str(na_hashset, word)
@@ -1387,7 +1400,7 @@ cdef _string_box_decode(parser_t *parser, int col,
         Py_ssize_t i, size
         size_t lines
         coliter_t it
-        char *word
+        const char *word = NULL
         ndarray[object] result
 
         int ret = 0
@@ -1406,7 +1419,7 @@ cdef _string_box_decode(parser_t *parser, int col,
     coliter_setup(&it, parser, col, line_start)
 
     for i in range(lines):
-        word = COLITER_NEXT(it)
+        COLITER_NEXT(it, word)
 
         if na_filter:
             k = kh_get_str(na_hashset, word)
@@ -1443,7 +1456,8 @@ cdef _to_fw_string(parser_t *parser, int col, int line_start,
         int error
         Py_ssize_t i, j
         coliter_t it
-        char *word, *data
+        const char *word = NULL
+        char *data
         ndarray result
 
     result = np.empty(line_end - line_start, dtype='|S%d' % width)
@@ -1452,7 +1466,7 @@ cdef _to_fw_string(parser_t *parser, int col, int line_start,
     coliter_setup(&it, parser, col, line_start)
 
     for i in range(line_end - line_start):
-        word = COLITER_NEXT(it)
+        COLITER_NEXT(it, word)
         strncpy(data, word, width)
         data += width
 
@@ -1467,7 +1481,7 @@ cdef _try_double(parser_t *parser, int col, int line_start, int line_end,
         int error, na_count = 0
         size_t i, lines
         coliter_t it
-        char *word
+        const char *word = NULL
         char *p_end
         double *data
         double NA = na_values[np.float64]
@@ -1483,7 +1497,7 @@ cdef _try_double(parser_t *parser, int col, int line_start, int line_end,
 
     if na_filter:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
 
             k = kh_get_str(na_hashset, word)
             # in the hash table
@@ -1507,7 +1521,7 @@ cdef _try_double(parser_t *parser, int col, int line_start, int line_end,
             data += 1
     else:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
             data[0] = parser.converter(word, &p_end, parser.decimal, parser.sci,
                                          parser.thousands, 1)
             if errno != 0 or p_end[0] or p_end == word:
@@ -1528,7 +1542,7 @@ cdef _try_int64(parser_t *parser, int col, int line_start, int line_end,
         int error, na_count = 0
         size_t i, lines
         coliter_t it
-        char *word
+        const char *word = NULL
         int64_t *data
         ndarray result
 
@@ -1542,7 +1556,7 @@ cdef _try_int64(parser_t *parser, int col, int line_start, int line_end,
 
     if na_filter:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
             k = kh_get_str(na_hashset, word)
             # in the hash table
             if k != na_hashset.n_buckets:
@@ -1559,7 +1573,7 @@ cdef _try_int64(parser_t *parser, int col, int line_start, int line_end,
                 return None, None
     else:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
             data[i] = str_to_int64(word, INT64_MIN, INT64_MAX,
                                    &error, parser.thousands)
             if error != 0:
@@ -1576,7 +1590,7 @@ cdef _try_bool(parser_t *parser, int col, int line_start, int line_end,
         int error, na_count = 0
         size_t i, lines
         coliter_t it
-        char *word
+        const char *word = NULL
         uint8_t *data
         ndarray result
 
@@ -1590,7 +1604,7 @@ cdef _try_bool(parser_t *parser, int col, int line_start, int line_end,
 
     if na_filter:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
 
             k = kh_get_str(na_hashset, word)
             # in the hash table
@@ -1606,7 +1620,7 @@ cdef _try_bool(parser_t *parser, int col, int line_start, int line_end,
             data += 1
     else:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
 
             error = to_boolean(word, data)
             if error != 0:
@@ -1623,7 +1637,7 @@ cdef _try_bool_flex(parser_t *parser, int col, int line_start, int line_end,
         int error, na_count = 0
         size_t i, lines
         coliter_t it
-        char *word
+        const char *word = NULL
         uint8_t *data
         ndarray result
 
@@ -1637,7 +1651,7 @@ cdef _try_bool_flex(parser_t *parser, int col, int line_start, int line_end,
 
     if na_filter:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
 
             k = kh_get_str(na_hashset, word)
             # in the hash table
@@ -1665,7 +1679,7 @@ cdef _try_bool_flex(parser_t *parser, int col, int line_start, int line_end,
             data += 1
     else:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
 
             k = kh_get_str(true_hashset, word)
             if k != true_hashset.n_buckets:
@@ -1685,33 +1699,6 @@ cdef _try_bool_flex(parser_t *parser, int col, int line_start, int line_end,
             data += 1
 
     return result.view(np.bool_), na_count
-
-cdef _get_na_mask(parser_t *parser, int col, int line_start, int line_end,
-                  kh_str_t *na_hashset):
-    cdef:
-        int error
-        Py_ssize_t i
-        size_t lines
-        coliter_t it
-        char *word
-        ndarray[uint8_t, cast=True] result
-        khiter_t k
-
-    lines = line_end - line_start
-    result = np.empty(lines, dtype=np.bool_)
-
-    coliter_setup(&it, parser, col, line_start)
-    for i in range(lines):
-        word = COLITER_NEXT(it)
-
-        k = kh_get_str(na_hashset, word)
-        # in the hash table
-        if k != na_hashset.n_buckets:
-            result[i] = 1
-        else:
-            result[i] = 0
-
-    return result
 
 cdef kh_str_t* kset_from_list(list values) except NULL:
     # caller takes responsibility for freeing the hash table
@@ -1895,7 +1882,7 @@ cdef _apply_converter(object f, parser_t *parser, int col,
         Py_ssize_t i
         size_t lines
         coliter_t it
-        char *word
+        const char *word = NULL
         char *errors = "strict"
         ndarray[object] result
         object val
@@ -1907,17 +1894,17 @@ cdef _apply_converter(object f, parser_t *parser, int col,
 
     if not PY3 and c_encoding == NULL:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
             val = PyBytes_FromString(word)
             result[i] = f(val)
     elif ((PY3 and c_encoding == NULL) or c_encoding == b'utf-8'):
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
             val = PyUnicode_FromString(word)
             result[i] = f(val)
     else:
         for i in range(lines):
-            word = COLITER_NEXT(it)
+            COLITER_NEXT(it, word)
             val = PyUnicode_Decode(word, strlen(word),
                                    c_encoding, errors)
             result[i] = f(val)

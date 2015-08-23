@@ -56,7 +56,7 @@ import pandas as pd
 from pandas import DataFrame, Series
 
 from suite import REPO_PATH
-VB_DIR = os.path.dirname(os.path.abspath(__file__))
+VB_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_MIN_DURATION = 0.01
 HEAD_COL="head[ms]"
 BASE_COL="base[ms]"
@@ -425,7 +425,7 @@ def print_report(df,h_head=None,h_msg="",h_baseline=None,b_msg=""):
         lfmt = ("{:%s}" % name_width)
         lfmt += ("| {:%d.4f} " % (col_width-2))* len(df.columns)
         lfmt += "|\n"
-        s += lfmt.format(df.index[i],*list(df.irow(i).values))
+        s += lfmt.format(df.index[i],*list(df.iloc[i].values))
 
     s+= ftr + "\n"
 
@@ -505,7 +505,7 @@ def main():
 
     print("\n")
 
-    # move away from the pandas root dit, to avoid possible import
+    # move away from the pandas root dir, to avoid possible import
     # surprises
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 

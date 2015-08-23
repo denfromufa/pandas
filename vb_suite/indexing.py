@@ -15,9 +15,8 @@ ts = tm.makeTimeSeries()
 dt = ts.index[500]
 """
 statement = "ts[dt]"
-
 bm_getitem = Benchmark(statement, setup, ncalls=100000,
-                       name='series_getitem_scalar')
+                       name='time_series_getitem_scalar')
 
 setup = common_setup + """
 index = tm.makeStringIndex(1000)
@@ -25,9 +24,9 @@ s = Series(np.random.rand(1000), index=index)
 idx = index[100]
 """
 statement = "s.get_value(idx)"
-bm_df_getitem3 = Benchmark(statement, setup,
-                           name='series_get_value',
-                           start_date=datetime(2011, 11, 12))
+bm_get_value = Benchmark(statement, setup,
+                         name='series_get_value',
+                         start_date=datetime(2011, 11, 12))
 
 
 setup = common_setup + """
@@ -227,12 +226,55 @@ series_loc_slice = Benchmark("s.loc[:800000]", setup)
 series_loc_list_like = Benchmark("s.loc[[800000]]", setup)
 series_loc_array = Benchmark("s.loc[np.arange(10000)]", setup)
 
-series_iloc_scalar = Benchmark("s.loc[800000]", setup)
-series_iloc_slice = Benchmark("s.loc[:800000]", setup)
-series_iloc_list_like = Benchmark("s.loc[[800000]]", setup)
-series_iloc_array = Benchmark("s.loc[np.arange(10000)]", setup)
+series_iloc_scalar = Benchmark("s.iloc[800000]", setup)
+series_iloc_slice = Benchmark("s.iloc[:800000]", setup)
+series_iloc_list_like = Benchmark("s.iloc[[800000]]", setup)
+series_iloc_array = Benchmark("s.iloc[np.arange(10000)]", setup)
 
 series_ix_scalar = Benchmark("s.ix[800000]", setup)
 series_ix_slice = Benchmark("s.ix[:800000]", setup)
 series_ix_list_like = Benchmark("s.ix[[800000]]", setup)
 series_ix_array = Benchmark("s.ix[np.arange(10000)]", setup)
+
+
+# multi-index slicing
+setup = common_setup + """
+np.random.seed(1234)
+idx=pd.IndexSlice
+n=100000
+mdt = pandas.DataFrame()
+mdt['A'] = np.random.choice(range(10000,45000,1000), n)
+mdt['B'] = np.random.choice(range(10,400), n)
+mdt['C'] = np.random.choice(range(1,150), n)
+mdt['D'] = np.random.choice(range(10000,45000), n)
+mdt['x'] = np.random.choice(range(400), n)
+mdt['y'] = np.random.choice(range(25), n)
+
+
+test_A = 25000
+test_B = 25
+test_C = 40
+test_D = 35000
+
+eps_A = 5000
+eps_B = 5
+eps_C = 5
+eps_D = 5000
+mdt2 = mdt.set_index(['A','B','C','D']).sortlevel()
+"""
+
+multiindex_slicers = Benchmark('mdt2.loc[idx[test_A-eps_A:test_A+eps_A,test_B-eps_B:test_B+eps_B,test_C-eps_C:test_C+eps_C,test_D-eps_D:test_D+eps_D],:]', setup,
+                               start_date=datetime(2015, 1, 1))
+
+#----------------------------------------------------------------------
+# take
+
+setup = common_setup + """
+s = Series(np.random.rand(100000))
+ts = Series(np.random.rand(100000),
+            index=date_range('2011-01-01', freq='S', periods=100000))
+indexer = [True, False, True, True, False] * 20000
+"""
+
+series_take_intindex = Benchmark("s.take(indexer)", setup)
+series_take_dtindex = Benchmark("ts.take(indexer)", setup)

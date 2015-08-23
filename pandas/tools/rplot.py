@@ -1,4 +1,5 @@
 import random
+import warnings
 from copy import deepcopy
 from pandas.core.common import _values_from_object
 
@@ -8,6 +9,16 @@ from pandas.compat import range, zip
 # TODO:
 # * Make sure legends work properly
 #
+
+
+warnings.warn("\n"
+              "The rplot trellis plotting interface is deprecated and will be "
+              "removed in a future version. We refer to external packages "
+              "like seaborn for similar but more refined functionality. \n\n"
+              "See our docs http://pandas.pydata.org/pandas-docs/stable/visualization.html#rplot "
+              "for some example how to convert your existing code to these "
+              "packages.", FutureWarning)
+
 
 class Scale:
     """
@@ -352,7 +363,7 @@ class GeomPoint(Layer):
             else:
                 ax = fig.gca()
         for index in range(len(self.data)):
-            row = self.data.irow(index)
+            row = self.data.iloc[index]
             x = row[self.aes['x']]
             y = row[self.aes['y']]
             size_scaler = self.aes['size']

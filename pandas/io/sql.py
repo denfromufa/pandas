@@ -38,7 +38,7 @@ class DatabaseError(IOError):
 _SQLALCHEMY_INSTALLED = None
 
 
-def _is_sqlalchemy_engine(con):
+def _is_sqlalchemy_connectable(con):
     global _SQLALCHEMY_INSTALLED
     if _SQLALCHEMY_INSTALLED is None:
         try:
@@ -62,7 +62,7 @@ def _is_sqlalchemy_engine(con):
 
     if _SQLALCHEMY_INSTALLED:
         import sqlalchemy
-        return isinstance(con, sqlalchemy.engine.Engine)
+        return isinstance(con, sqlalchemy.engine.Connectable)
     else:
         return False
 
@@ -80,17 +80,17 @@ def _convert_params(sql, params):
 
 def _handle_date_column(col, format=None):
     if isinstance(format, dict):
-        return to_datetime(col, **format)
+        return to_datetime(col, errors='ignore', **format)
     else:
         if format in ['D', 's', 'ms', 'us', 'ns']:
-            return to_datetime(col, coerce=True, unit=format)
+            return to_datetime(col, errors='coerce', unit=format, utc=True)
         elif (issubclass(col.dtype.type, np.floating)
                 or issubclass(col.dtype.type, np.integer)):
             # parse dates as timestamp
             format = 's' if format is None else format
-            return to_datetime(col, coerce=True, unit=format)
+            return to_datetime(col, errors='coerce', unit=format, utc=True)
         else:
-            return to_datetime(col, coerce=True, format=format)
+            return to_datetime(col, errors='coerce', format=format, utc=True)
 
 
 def _parse_date_columns(data_frame, parse_dates):
@@ -139,7 +139,7 @@ def execute(sql, con, cur=None, params=None):
     ----------
     sql : string
         Query to be executed
-    con : SQLAlchemy engine or sqlite3 DBAPI2 connection
+    con : SQLAlchemy connectable(engine/connection) or sqlite3 DBAPI2 connection
         Using SQLAlchemy makes it possible to use any DB supported by that
         library.
         If a DBAPI2 object, only sqlite3 is supported.
@@ -282,14 +282,14 @@ def read_sql_table(table_name, con, schema=None, index_col=None,
                    chunksize=None):
     """Read SQL database table into a DataFrame.
 
-    Given a table name and an SQLAlchemy engine, returns a DataFrame.
+    Given a table name and an SQLAlchemy connectable, returns a DataFrame.
     This function does not support DBAPI connections.
 
     Parameters
     ----------
     table_name : string
         Name of SQL table in database
-    con : SQLAlchemy engine
+    con : SQLAlchemy connectable (or database string URI)
         Sqlite DBAPI connection mode not supported
     schema : string, default None
         Name of SQL schema in database to query (if database flavor
@@ -318,20 +318,26 @@ def read_sql_table(table_name, con, schema=None, index_col=None,
     -------
     DataFrame
 
+    Notes
+    -----
+    Any datetime values with time zone information will be converted to UTC
+
     See also
     --------
     read_sql_query : Read SQL query into a DataFrame.
     read_sql
 
     """
-    if not _is_sqlalchemy_engine(con):
+    
+    con = _engine_builder(con)
+    if not _is_sqlalchemy_connectable(con):
         raise NotImplementedError("read_sql_table only supported for "
-                                  "SQLAlchemy engines.")
+                                  "SQLAlchemy connectable.")
     import sqlalchemy
     from sqlalchemy.schema import MetaData
     meta = MetaData(con, schema=schema)
     try:
-        meta.reflect(only=[table_name])
+        meta.reflect(only=[table_name], views=True)
     except sqlalchemy.exc.InvalidRequestError:
         raise ValueError("Table %s not found" % table_name)
 
@@ -358,7 +364,8 @@ def read_sql_query(sql, con, index_col=None, coerce_float=True, params=None,
     ----------
     sql : string
         SQL query to be executed
-    con : SQLAlchemy engine or sqlite3 DBAPI2 connection
+    con : SQLAlchemy connectable(engine/connection) or database string URI 
+        or sqlite3 DBAPI2 connection
         Using SQLAlchemy makes it possible to use any DB supported by that
         library.
         If a DBAPI2 object, only sqlite3 is supported.
@@ -390,6 +397,11 @@ def read_sql_query(sql, con, index_col=None, coerce_float=True, params=None,
     -------
     DataFrame
 
+    Notes
+    -----
+    Any datetime values with time zone information parsed via the `parse_dates`
+    parameter will be converted to UTC
+
     See also
     --------
     read_sql_table : Read SQL database table into a DataFrame
@@ -411,7 +423,8 @@ def read_sql(sql, con, index_col=None, coerce_float=True, params=None,
     ----------
     sql : string
         SQL query to be executed or database table name.
-    con : SQLAlchemy engine or DBAPI2 connection (fallback mode)
+    con : SQLAlchemy connectable(engine/connection) or database string URI
+        or DBAPI2 connection (fallback mode)
         Using SQLAlchemy makes it possible to use any DB supported by that
         library.
         If a DBAPI2 object, only sqlite3 is supported.
@@ -451,7 +464,8 @@ def read_sql(sql, con, index_col=None, coerce_float=True, params=None,
     This function is a convenience wrapper around ``read_sql_table`` and
     ``read_sql_query`` (and for backward compatibility) and will delegate
     to the specific function depending on the provided input (database
-    table name or sql query).
+    table name or sql query).  The delegated function might have more specific
+    notes about their functionality not listed here.
 
     See also
     --------
@@ -494,14 +508,15 @@ def to_sql(frame, name, con, flavor='sqlite', schema=None, if_exists='fail',
     frame : DataFrame
     name : string
         Name of SQL table
-    con : SQLAlchemy engine or sqlite3 DBAPI2 connection
+    con : SQLAlchemy connectable(engine/connection) or database string URI
+        or sqlite3 DBAPI2 connection
         Using SQLAlchemy makes it possible to use any DB supported by that
         library.
         If a DBAPI2 object, only sqlite3 is supported.
     flavor : {'sqlite', 'mysql'}, default 'sqlite'
-        The flavor of SQL to use. Ignored when using SQLAlchemy engine.
+        The flavor of SQL to use. Ignored when using SQLAlchemy connectable.
         'mysql' is deprecated and will be removed in future versions, but it
-        will be further supported through SQLAlchemy engines.
+        will be further supported through SQLAlchemy connectables.
     schema : string, default None
         Name of SQL schema in database to write to (if database flavor
         supports this). If None, use default schema (default).
@@ -531,7 +546,8 @@ def to_sql(frame, name, con, flavor='sqlite', schema=None, if_exists='fail',
     if isinstance(frame, Series):
         frame = frame.to_frame()
     elif not isinstance(frame, DataFrame):
-        raise NotImplementedError
+        raise NotImplementedError("'frame' argument should be either a "
+                                  "Series or a DataFrame")
 
     pandas_sql.to_sql(frame, name, if_exists=if_exists, index=index,
                       index_label=index_label, schema=schema,
@@ -546,14 +562,14 @@ def has_table(table_name, con, flavor='sqlite', schema=None):
     ----------
     table_name: string
         Name of SQL table
-    con: SQLAlchemy engine or sqlite3 DBAPI2 connection
+    con: SQLAlchemy connectable(engine/connection) or sqlite3 DBAPI2 connection
         Using SQLAlchemy makes it possible to use any DB supported by that
         library.
         If a DBAPI2 object, only sqlite3 is supported.
     flavor: {'sqlite', 'mysql'}, default 'sqlite'
-        The flavor of SQL to use. Ignored when using SQLAlchemy engine.
+        The flavor of SQL to use. Ignored when using SQLAlchemy connectable.
         'mysql' is deprecated and will be removed in future versions, but it
-        will be further supported through SQLAlchemy engines.
+        will be further supported through SQLAlchemy connectables.
     schema : string, default None
         Name of SQL schema in database to write to (if database flavor supports
         this). If None, use default schema (default).
@@ -570,8 +586,24 @@ table_exists = has_table
 
 _MYSQL_WARNING = ("The 'mysql' flavor with DBAPI connection is deprecated "
                   "and will be removed in future versions. "
-                  "MySQL will be further supported with SQLAlchemy engines.")
+                  "MySQL will be further supported with SQLAlchemy connectables.")
 
+
+def _engine_builder(con):
+    """
+    Returns a SQLAlchemy engine from a URI (if con is a string)
+    else it just return con without modifying it
+    """
+    if isinstance(con, string_types):
+        try:
+            import sqlalchemy
+            con = sqlalchemy.create_engine(con)
+            return con
+
+        except ImportError:
+            _SQLALCHEMY_INSTALLED = False
+
+    return con
 
 def pandasSQL_builder(con, flavor=None, schema=None, meta=None,
                       is_cursor=False):
@@ -581,7 +613,8 @@ def pandasSQL_builder(con, flavor=None, schema=None, meta=None,
     """
     # When support for DBAPI connections is removed,
     # is_cursor should not be necessary.
-    if _is_sqlalchemy_engine(con):
+    con = _engine_builder(con)
+    if _is_sqlalchemy_connectable(con):
         return SQLDatabase(con, schema=schema, meta=meta)
     else:
         if flavor == 'mysql':
@@ -626,7 +659,7 @@ class SQLTable(PandasObject):
 
     def sql_schema(self):
         from sqlalchemy.schema import CreateTable
-        return str(CreateTable(self.table).compile(self.pd_sql.engine))
+        return str(CreateTable(self.table).compile(self.pd_sql.connectable))
 
     def _execute_create(self):
         # Inserting table into database, add to MetaData object
@@ -823,7 +856,11 @@ class SQLTable(PandasObject):
                    for name, typ, is_index in column_names_and_types]
 
         if self.keys is not None:
-            pkc = PrimaryKeyConstraint(self.keys, name=self.name + '_pk')
+            if not com.is_list_like(self.keys):
+                keys = [self.keys]
+            else:
+                keys = self.keys
+            pkc = PrimaryKeyConstraint(*keys, name=self.name + '_pk')
             columns.append(pkc)
 
         schema = self.schema or self.pd_sql.meta.schema
@@ -888,8 +925,8 @@ class SQLTable(PandasObject):
 
     def _get_notnull_col_dtype(self, col):
         """
-        Infer datatype of the Series col.  In case the dtype of col is 'object' 
-        and it contains NA values, this infers the datatype of the not-NA 
+        Infer datatype of the Series col.  In case the dtype of col is 'object'
+        and it contains NA values, this infers the datatype of the not-NA
         values.  Needed for inserting typed data containing NULLs, GH8778.
         """
         col_for_inference = col
@@ -908,7 +945,7 @@ class SQLTable(PandasObject):
 
         col_type = self._get_notnull_col_dtype(col)
 
-        from sqlalchemy.types import (BigInteger, Float, Text, Boolean,
+        from sqlalchemy.types import (BigInteger, Integer, Float, Text, Boolean,
             DateTime, Date, Time)
 
         if col_type == 'datetime64' or col_type == 'datetime':
@@ -923,10 +960,15 @@ class SQLTable(PandasObject):
                           "database.", UserWarning)
             return BigInteger
         elif col_type == 'floating':
-            return Float
+            if col.dtype == 'float32':
+                return Float(precision=23)
+            else:
+                return Float(precision=53)
         elif col_type == 'integer':
-            # TODO: Refine integer size.
-            return BigInteger
+            if col.dtype == 'int32':
+                return Integer
+            else:
+                return BigInteger
         elif col_type == 'boolean':
             return Boolean
         elif col_type == 'date':
@@ -962,11 +1004,11 @@ class PandasSQL(PandasObject):
     """
 
     def read_sql(self, *args, **kwargs):
-        raise ValueError("PandasSQL must be created with an SQLAlchemy engine"
+        raise ValueError("PandasSQL must be created with an SQLAlchemy connectable"
                          " or connection+sql flavor")
 
     def to_sql(self, *args, **kwargs):
-        raise ValueError("PandasSQL must be created with an SQLAlchemy engine"
+        raise ValueError("PandasSQL must be created with an SQLAlchemy connectable"
                          " or connection+sql flavor")
 
 
@@ -977,8 +1019,8 @@ class SQLDatabase(PandasSQL):
 
     Parameters
     ----------
-    engine : SQLAlchemy engine
-        Engine to connect with the database. Using SQLAlchemy makes it
+    engine : SQLAlchemy connectable
+        Connectable to connect with the database. Using SQLAlchemy makes it
         possible to use any DB supported by that library.
     schema : string, default None
         Name of SQL schema in database to write to (if database flavor
@@ -991,19 +1033,24 @@ class SQLDatabase(PandasSQL):
     """
 
     def __init__(self, engine, schema=None, meta=None):
-        self.engine = engine
+        self.connectable = engine
         if not meta:
             from sqlalchemy.schema import MetaData
-            meta = MetaData(self.engine, schema=schema)
+            meta = MetaData(self.connectable, schema=schema)
 
         self.meta = meta
 
+    @contextmanager
     def run_transaction(self):
-        return self.engine.begin()
+        with self.connectable.begin() as tx:
+            if hasattr(tx, 'execute'):
+                yield tx
+            else:
+                yield self.connectable
 
     def execute(self, *args, **kwargs):
-        """Simple passthrough to SQLAlchemy engine"""
-        return self.engine.execute(*args, **kwargs)
+        """Simple passthrough to SQLAlchemy connectable"""
+        return self.connectable.execute(*args, **kwargs)
 
     def read_table(self, table_name, index_col=None, coerce_float=True,
                    parse_dates=None, columns=None, schema=None,
@@ -1171,7 +1218,13 @@ class SQLDatabase(PandasSQL):
         table.create()
         table.insert(chunksize)
         # check for potentially case sensitivity issues (GH7815)
-        if name not in self.engine.table_names(schema=schema or self.meta.schema):
+        engine = self.connectable.engine
+        with self.connectable.connect() as conn:
+            table_names = engine.table_names(
+                schema=schema or self.meta.schema,
+                connection=conn,
+            )
+        if name not in table_names:
             warnings.warn("The provided table name '{0}' is not found exactly "
                           "as such in the database after writing the table, "
                           "possibly due to case sensitivity issues. Consider "
@@ -1182,24 +1235,37 @@ class SQLDatabase(PandasSQL):
         return self.meta.tables
 
     def has_table(self, name, schema=None):
-        return self.engine.has_table(name, schema or self.meta.schema)
+        return self.connectable.run_callable(
+            self.connectable.dialect.has_table,
+            name,
+            schema or self.meta.schema,
+        )
 
     def get_table(self, table_name, schema=None):
         schema = schema or self.meta.schema
         if schema:
-            return self.meta.tables.get('.'.join([schema, table_name]))
+            tbl = self.meta.tables.get('.'.join([schema, table_name]))
         else:
-            return self.meta.tables.get(table_name)
+            tbl = self.meta.tables.get(table_name)
+
+        # Avoid casting double-precision floats into decimals
+        from sqlalchemy import Numeric
+        for column in tbl.columns:
+            if isinstance(column.type, Numeric):
+                column.type.asdecimal = False
+
+        return tbl
 
     def drop_table(self, table_name, schema=None):
         schema = schema or self.meta.schema
-        if self.engine.has_table(table_name, schema):
+        if self.has_table(table_name, schema):
             self.meta.reflect(only=[table_name], schema=schema)
             self.get_table(table_name, schema).drop()
             self.meta.clear()
 
-    def _create_sql_schema(self, frame, table_name, keys=None):
-        table = SQLTable(table_name, self, frame=frame, index=False, keys=keys)
+    def _create_sql_schema(self, frame, table_name, keys=None, dtype=None):
+        table = SQLTable(table_name, self, frame=frame, index=False, keys=keys,
+                         dtype=dtype)
         return str(table.sql_schema())
 
 
@@ -1213,7 +1279,7 @@ _SQL_TYPES = {
         'sqlite': 'TEXT',
     },
     'floating': {
-        'mysql': 'FLOAT',
+        'mysql': 'DOUBLE',
         'sqlite': 'REAL',
     },
     'integer': {
@@ -1239,18 +1305,56 @@ _SQL_TYPES = {
 }
 
 
+def _get_unicode_name(name):
+    try:
+        uname = name.encode("utf-8", "strict").decode("utf-8")
+    except UnicodeError:
+        raise ValueError("Cannot convert identifier to UTF-8: '%s'" % name)
+    return uname
+
+def _get_valid_mysql_name(name):
+    # Filter for unquoted identifiers
+    # See http://dev.mysql.com/doc/refman/5.0/en/identifiers.html
+    uname = _get_unicode_name(name)
+    if not len(uname):
+        raise ValueError("Empty table or column name specified")
+
+    basere = r'[0-9,a-z,A-Z$_]'
+    for c in uname:
+        if not re.match(basere, c):
+            if not (0x80 < ord(c) < 0xFFFF):
+                raise ValueError("Invalid MySQL identifier '%s'" % uname)
+
+    return '`' + uname + '`'
+
+
+def _get_valid_sqlite_name(name):
+    # See http://stackoverflow.com/questions/6514274/how-do-you-escape-strings-for-sqlite-table-column-names-in-python
+    # Ensure the string can be encoded as UTF-8.
+    # Ensure the string does not include any NUL characters.
+    # Replace all " with "".
+    # Wrap the entire thing in double quotes.
+
+    uname = _get_unicode_name(name)
+    if not len(uname):
+        raise ValueError("Empty table or column name specified")
+
+    nul_index = uname.find("\x00")
+    if nul_index >= 0:
+        raise ValueError('SQLite identifier cannot contain NULs')
+    return '"' + uname.replace('"', '""') + '"'
+
+
 # SQL enquote and wildcard symbols
-_SQL_SYMB = {
-    'mysql': {
-        'br_l': '`',
-        'br_r': '`',
-        'wld': '%s'
-    },
-    'sqlite': {
-        'br_l': '[',
-        'br_r': ']',
-        'wld': '?'
-    }
+_SQL_WILDCARD = {
+    'mysql': '%s',
+    'sqlite': '?'
+}
+
+# Validate and return escaped identifier
+_SQL_GET_IDENTIFIER = {
+    'mysql': _get_valid_mysql_name,
+    'sqlite': _get_valid_sqlite_name,
 }
 
 
@@ -1276,18 +1380,17 @@ class SQLiteTable(SQLTable):
     def insert_statement(self):
         names = list(map(str, self.frame.columns))
         flv = self.pd_sql.flavor
-        br_l = _SQL_SYMB[flv]['br_l']  # left val quote char
-        br_r = _SQL_SYMB[flv]['br_r']  # right val quote char
-        wld = _SQL_SYMB[flv]['wld']  # wildcard char
+        wld = _SQL_WILDCARD[flv]  # wildcard char
+        escape = _SQL_GET_IDENTIFIER[flv]
 
         if self.index is not None:
             [names.insert(0, idx) for idx in self.index[::-1]]
 
-        bracketed_names = [br_l + column + br_r for column in names]
+        bracketed_names = [escape(column) for column in names]
         col_names = ','.join(bracketed_names)
         wildcards = ','.join([wld] * len(names))
         insert_statement = 'INSERT INTO %s (%s) VALUES (%s)' % (
-            self.name, col_names, wildcards)
+            escape(self.name), col_names, wildcards)
         return insert_statement
 
     def _execute_insert(self, conn, keys, data_iter):
@@ -1309,29 +1412,32 @@ class SQLiteTable(SQLTable):
             warnings.warn(_SAFE_NAMES_WARNING)
 
         flv = self.pd_sql.flavor
+        escape = _SQL_GET_IDENTIFIER[flv]
 
-        br_l = _SQL_SYMB[flv]['br_l']  # left val quote char
-        br_r = _SQL_SYMB[flv]['br_r']  # right val quote char
+        create_tbl_stmts = [escape(cname) + ' ' + ctype
+                            for cname, ctype, _ in column_names_and_types]
 
-        create_tbl_stmts = [(br_l + '%s' + br_r + ' %s') % (cname, col_type)
-                            for cname, col_type, _ in column_names_and_types]
         if self.keys is not None and len(self.keys):
-            cnames_br = ",".join([br_l + c + br_r for c in self.keys])
+            if not com.is_list_like(self.keys):
+                keys = [self.keys]
+            else:
+                keys = self.keys
+            cnames_br = ", ".join([escape(c) for c in keys])
             create_tbl_stmts.append(
                 "CONSTRAINT {tbl}_pk PRIMARY KEY ({cnames_br})".format(
                 tbl=self.name, cnames_br=cnames_br))
 
-        create_stmts = ["CREATE TABLE " + self.name + " (\n" +
+        create_stmts = ["CREATE TABLE " + escape(self.name) + " (\n" +
                         ',\n  '.join(create_tbl_stmts) + "\n)"]
 
         ix_cols = [cname for cname, _, is_index in column_names_and_types
                    if is_index]
         if len(ix_cols):
             cnames = "_".join(ix_cols)
-            cnames_br = ",".join([br_l + c + br_r for c in ix_cols])
+            cnames_br = ",".join([escape(c) for c in ix_cols])
             create_stmts.append(
-                "CREATE INDEX ix_{tbl}_{cnames} ON {tbl} ({cnames_br})".format(
-                tbl=self.name, cnames=cnames, cnames_br=cnames_br))
+                "CREATE INDEX " + escape("ix_"+self.name+"_"+cnames) +
+                "ON " + escape(self.name) + " (" + cnames_br + ")")
 
         return create_stmts
 
@@ -1355,7 +1461,7 @@ class SQLiteTable(SQLTable):
 
         elif col_type == "complex":
             raise ValueError('Complex datatypes not supported')
-            
+
         if col_type not in _SQL_TYPES:
             col_type = "string"
 
@@ -1382,7 +1488,8 @@ class SQLiteDatabase(PandasSQL):
         if flavor is None:
             flavor = 'sqlite'
         if flavor not in ['sqlite', 'mysql']:
-            raise NotImplementedError
+            raise NotImplementedError("flavors other than SQLite and MySQL "
+                                      "are not supported")
         else:
             self.flavor = flavor
 
@@ -1505,28 +1612,32 @@ class SQLiteDatabase(PandasSQL):
         table.insert(chunksize)
 
     def has_table(self, name, schema=None):
+        escape = _SQL_GET_IDENTIFIER[self.flavor]
+        esc_name = escape(name)
+        wld = _SQL_WILDCARD[self.flavor]
         flavor_map = {
             'sqlite': ("SELECT name FROM sqlite_master "
-                       "WHERE type='table' AND name='%s';") % name,
-            'mysql': "SHOW TABLES LIKE '%s'" % name}
+                       "WHERE type='table' AND name=%s;") % wld,
+            'mysql': "SHOW TABLES LIKE %s" % wld}
         query = flavor_map.get(self.flavor)
 
-        return len(self.execute(query).fetchall()) > 0
+        return len(self.execute(query, [name,]).fetchall()) > 0
 
     def get_table(self, table_name, schema=None):
         return None  # not supported in fallback mode
 
     def drop_table(self, name, schema=None):
-        drop_sql = "DROP TABLE %s" % name
+        escape = _SQL_GET_IDENTIFIER[self.flavor]
+        drop_sql = "DROP TABLE %s" % escape(name)
         self.execute(drop_sql)
 
-    def _create_sql_schema(self, frame, table_name, keys=None):
+    def _create_sql_schema(self, frame, table_name, keys=None, dtype=None):
         table = SQLiteTable(table_name, self, frame=frame, index=False,
-                            keys=keys)
+                            keys=keys, dtype=dtype)
         return str(table.sql_schema())
 
 
-def get_schema(frame, name, flavor='sqlite', keys=None, con=None):
+def get_schema(frame, name, flavor='sqlite', keys=None, con=None, dtype=None):
     """
     Get the SQL db table schema for the given frame.
 
@@ -1536,20 +1647,23 @@ def get_schema(frame, name, flavor='sqlite', keys=None, con=None):
     name : string
         name of SQL table
     flavor : {'sqlite', 'mysql'}, default 'sqlite'
-        The flavor of SQL to use. Ignored when using SQLAlchemy engine.
+        The flavor of SQL to use. Ignored when using SQLAlchemy connectable.
         'mysql' is deprecated and will be removed in future versions, but it
         will be further supported through SQLAlchemy engines.
     keys : string or sequence
         columns to use a primary key
-    con: an open SQL database connection object or an SQLAlchemy engine
+    con: an open SQL database connection object or a SQLAlchemy connectable
         Using SQLAlchemy makes it possible to use any DB supported by that
         library.
         If a DBAPI2 object, only sqlite3 is supported.
+    dtype : dict of column name to SQL type, default None
+        Optional specifying the datatype for columns. The SQL type should
+        be a SQLAlchemy type, or a string for sqlite3 fallback connection.
 
     """
 
     pandas_sql = pandasSQL_builder(con=con, flavor=flavor)
-    return pandas_sql._create_sql_schema(frame, name, keys=keys)
+    return pandas_sql._create_sql_schema(frame, name, keys=keys, dtype=dtype)
 
 
 # legacy names, with depreciation warnings and copied docs
@@ -1596,8 +1710,8 @@ def write_frame(frame, name, con, flavor='sqlite', if_exists='fail', **kwargs):
 
     - With ``to_sql`` the index is written to the sql database by default. To
       keep the behaviour this function you need to specify ``index=False``.
-    - The new ``to_sql`` function supports sqlalchemy engines to work with
-      different sql flavors.
+    - The new ``to_sql`` function supports sqlalchemy connectables to work
+      with different sql flavors.
 
     See also
     --------

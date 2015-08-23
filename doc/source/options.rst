@@ -15,10 +15,10 @@ Options and Settings
 
 Overview
 --------
-pandas has an options system that lets you customize some aspects of it's behaviour,
+pandas has an options system that lets you customize some aspects of its behaviour,
 display-related options being those the user is most likely to adjust.
 
-Options have a full "dotted-style", case-insensitive name (e.g. ``display.max_rows``),
+Options have a full "dotted-style", case-insensitive name (e.g. ``display.max_rows``).
 You can get/set options directly as attributes of the top-level ``options`` attribute:
 
 .. ipython:: python
@@ -29,7 +29,7 @@ You can get/set options directly as attributes of the top-level ``options`` attr
    pd.options.display.max_rows
 
 There is also an API composed of 5 relevant functions, available directly from the ``pandas``
-namespace, and they are:
+namespace:
 
 - :func:`~pandas.get_option` / :func:`~pandas.set_option` - get/set the value of a single option.
 - :func:`~pandas.reset_option` - reset one or more options to their default value.
@@ -57,11 +57,7 @@ The following will **not work** because it matches multiple option names, e.g.
 .. ipython:: python
    :okexcept:
 
-   try:
-       pd.get_option("column")
-   except KeyError as e:
-       print(e)
-
+   pd.get_option("column")
 
 **Note:** Using this form of shorthand may cause your code to break if new options with similar names are added in future versions.
 
@@ -142,6 +138,7 @@ More information can be found in the `ipython documentation
   pd.set_option('display.max_rows', 999)
   pd.set_option('precision', 5)
 
+.. _options.frequently_used:
 
 Frequently Used Options
 -----------------------
@@ -153,7 +150,7 @@ lines are replaced by an ellipsis.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.random.randn(7,2))
+   df = pd.DataFrame(np.random.randn(7,2))
    pd.set_option('max_rows', 7)
    df
    pd.set_option('max_rows', 5)
@@ -165,7 +162,7 @@ dataframes to stretch across pages, wrapped over the full column vs row-wise.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.random.randn(5,10))
+   df = pd.DataFrame(np.random.randn(5,10))
    pd.set_option('expand_frame_repr', True)
    df
    pd.set_option('expand_frame_repr', False)
@@ -177,7 +174,7 @@ dataframes to stretch across pages, wrapped over the full column vs row-wise.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.random.randn(10,10))
+   df = pd.DataFrame(np.random.randn(10,10))
    pd.set_option('max_rows', 5)
    pd.set_option('large_repr', 'truncate')
    df
@@ -191,8 +188,8 @@ of this length or longer will be truncated with an ellipsis.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.array([['foo', 'bar', 'bim', 'uncomfortably long string'],
-                        ['horse', 'cow', 'banana', 'apple']]))
+   df = pd.DataFrame(np.array([['foo', 'bar', 'bim', 'uncomfortably long string'],
+                               ['horse', 'cow', 'banana', 'apple']]))
    pd.set_option('max_colwidth',40)
    df
    pd.set_option('max_colwidth', 6)
@@ -204,7 +201,7 @@ will be given.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.random.randn(10,10))
+   df = pd.DataFrame(np.random.randn(10,10))
    pd.set_option('max_info_columns', 11)
    df.info()
    pd.set_option('max_info_columns', 5)
@@ -218,7 +215,7 @@ can specify the option ``df.info(null_counts=True)`` to override on showing a pa
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.random.choice([0,1,np.nan],size=(10,10)))
+   df  =pd.DataFrame(np.random.choice([0,1,np.nan], size=(10,10)))
    df
    pd.set_option('max_info_rows', 11)
    df.info()
@@ -226,12 +223,12 @@ can specify the option ``df.info(null_counts=True)`` to override on showing a pa
    df.info()
    pd.reset_option('max_info_rows')
 
-``display.precision`` sets the output display precision. This is only a
+``display.precision`` sets the output display precision in terms of decimal places. This is only a
 suggestion.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.random.randn(5,5))
+   df = pd.DataFrame(np.random.randn(5,5))
    pd.set_option('precision',7)
    df
    pd.set_option('precision',4)
@@ -243,7 +240,7 @@ precision at which the number is stored.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.random.randn(6,6))
+   df = pd.DataFrame(np.random.randn(6,6))
    pd.set_option('chop_threshold', 0)
    df
    pd.set_option('chop_threshold', .5)
@@ -255,7 +252,8 @@ Options are 'right', and 'left'.
 
 .. ipython:: python
 
-   df=pd.DataFrame(np.array([np.random.randn(6), np.random.randint(1,9,6)*.1, np.zeros(6)]).T, columns=['A', 'B', 'C'], dtype='float')
+   df = pd.DataFrame(np.array([np.random.randn(6), np.random.randint(1,9,6)*.1, np.zeros(6)]).T,
+                     columns=['A', 'B', 'C'], dtype='float')
    pd.set_option('colheader_justify', 'right')
    df
    pd.set_option('colheader_justify', 'left')
@@ -291,7 +289,7 @@ display.expand_frame_repr  True         Whether to print out the full DataFrame
                                         multiple lines, `max_columns` is
                                         still respected, but the output will
                                         wrap-around across multiple "pages"
-                                        if it's width exceeds `display.width`.
+                                        if its width exceeds `display.width`.
 display.float_format       None         The callable should accept a floating
                                         point number and return a string with
                                         the desired format of the number.
@@ -366,9 +364,11 @@ display.notebook_repr_html True         When True, IPython notebook will
                                         pandas objects (if it is available).
 display.pprint_nest_depth  3            Controls the number of nested levels
                                         to process when pretty-printing
-display.precision          7            Floating point output precision
-                                        (number of significant digits). This is
-                                        only a suggestion
+display.precision          6            Floating point output precision in
+                                        terms of number of places after the
+                                        decimal, for regular formatting as well
+                                        as scientific notation. Similar to
+                                        numpy's ``precision`` print option
 display.show_dimensions    truncate     Whether to print out dimensions
                                         at the end of DataFrame repr.
                                         If 'truncate' is specified, only
@@ -412,7 +412,7 @@ mode.use_inf_as_null       False        True means treat None, NaN, -INF,
 Number Formatting
 ------------------
 
-pandas also allow you to set how numbers are displayed in the console.
+pandas also allows you to set how numbers are displayed in the console.
 This option is not set through the ``set_options`` API.
 
 Use the ``set_eng_float_format`` function

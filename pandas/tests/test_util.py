@@ -3,6 +3,7 @@ import warnings
 
 import nose
 
+import sys
 import pandas.util
 from pandas.util.decorators import deprecate_kwarg
 import pandas.util.testing as tm

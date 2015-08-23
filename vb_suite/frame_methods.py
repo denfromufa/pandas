@@ -418,8 +418,8 @@ frame_dtypes = Benchmark('df.dtypes', setup,
 #----------------------------------------------------------------------
 # equals
 setup = common_setup + """
-def make_pair(name):
-    df = globals()[name]
+def make_pair(frame):
+    df = frame
     df2 = df.copy()
     df2.ix[-1,-1] = np.nan
     return df, df2
@@ -437,8 +437,8 @@ object_df = DataFrame([['foo']*1000]*1000)
 nonunique_cols = object_df.copy()
 nonunique_cols.columns = ['A']*len(nonunique_cols.columns)
 
-pairs = dict([(name,make_pair(name))
-         for name in ('float_df', 'object_df', 'nonunique_cols')])
+pairs = dict([(name, make_pair(frame))
+         for name, frame in (('float_df', float_df), ('object_df', object_df), ('nonunique_cols', nonunique_cols))])
 """
 frame_float_equal = Benchmark('test_equal("float_df")', setup)
 frame_object_equal = Benchmark('test_equal("object_df")', setup)
@@ -500,9 +500,26 @@ def get_data(n=100000):
 frame_from_records_generator = Benchmark('df = DataFrame.from_records(get_data())',
                                 setup,
                                 name='frame_from_records_generator',
-                                start_date=datetime(2013,10,04))  # issue-4911
+                                start_date=datetime(2013,10,4))  # issue-4911
 
 frame_from_records_generator_nrows = Benchmark('df = DataFrame.from_records(get_data(), nrows=1000)',
                                 setup,
                                 name='frame_from_records_generator_nrows',
                                 start_date=datetime(2013,10,04))  # issue-4911
+
+#-----------------------------------------------------------------------------
+# duplicated
+
+setup = common_setup + '''
+n = 1 << 20
+
+t = date_range('2015-01-01', freq='S', periods=n // 64)
+xs = np.random.randn(n // 64).round(2)
+
+df = DataFrame({'a':np.random.randint(- 1 << 8, 1 << 8, n),
+                'b':np.random.choice(t, n),
+                'c':np.random.choice(xs, n)})
+'''
+
+frame_duplicated = Benchmark('df.duplicated()', setup,
+                             name='frame_duplicated')

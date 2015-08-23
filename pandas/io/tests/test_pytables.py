@@ -9,10 +9,11 @@ import datetime
 import numpy as np
 
 import pandas
+import pandas as pd
 from pandas import (Series, DataFrame, Panel, MultiIndex, Categorical, bdate_range,
-                    date_range, Index, DatetimeIndex, isnull)
+                    date_range, timedelta_range, Index, DatetimeIndex, TimedeltaIndex, isnull)
 
-from pandas.io.pytables import _tables
+from pandas.io.pytables import _tables, TableIterator
 try:
     _tables()
 except ImportError as e:
@@ -33,6 +34,7 @@ from pandas import concat, Timestamp
 from pandas import compat
 from pandas.compat import range, lrange, u
 from pandas.util.testing import assert_produces_warning
+from numpy.testing.decorators import slow
 
 try:
     import tables
@@ -129,18 +131,18 @@ def compat_assert_produces_warning(w,f):
             f()
 
 
-class TestHDFStore(tm.TestCase):
+class Base(tm.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        super(TestHDFStore, cls).setUpClass()
+        super(Base, cls).setUpClass()
 
         # Pytables 3.0.0 deprecates lots of things
         tm.reset_testing_mode()
 
     @classmethod
     def tearDownClass(cls):
-        super(TestHDFStore, cls).tearDownClass()
+        super(Base, cls).tearDownClass()
 
         # Pytables 3.0.0 deprecates lots of things
         tm.set_testing_mode()
@@ -153,51 +155,55 @@ class TestHDFStore(tm.TestCase):
     def tearDown(self):
         pass
 
+
+class TestHDFStore(Base):
+
     def test_factory_fun(self):
+        path = create_tempfile(self.path)
         try:
-            with get_store(self.path) as tbl:
+            with get_store(path) as tbl:
                 raise ValueError('blah')
         except ValueError:
             pass
         finally:
-            safe_remove(self.path)
+            safe_remove(path)
 
         try:
-            with get_store(self.path) as tbl:
+            with get_store(path) as tbl:
                 tbl['a'] = tm.makeDataFrame()
 
-            with get_store(self.path) as tbl:
+            with get_store(path) as tbl:
                 self.assertEqual(len(tbl), 1)
                 self.assertEqual(type(tbl['a']), DataFrame)
         finally:
             safe_remove(self.path)
 
     def test_context(self):
+        path = create_tempfile(self.path)
         try:
-            with HDFStore(self.path) as tbl:
+            with HDFStore(path) as tbl:
                 raise ValueError('blah')
         except ValueError:
             pass
         finally:
-            safe_remove(self.path)
+            safe_remove(path)
 
         try:
-            with HDFStore(self.path) as tbl:
+            with HDFStore(path) as tbl:
                 tbl['a'] = tm.makeDataFrame()
 
-            with HDFStore(self.path) as tbl:
+            with HDFStore(path) as tbl:
                 self.assertEqual(len(tbl), 1)
                 self.assertEqual(type(tbl['a']), DataFrame)
         finally:
-            safe_remove(self.path)
+            safe_remove(path)
 
     def test_conv_read_write(self):
-
+        path = create_tempfile(self.path)
         try:
-
             def roundtrip(key, obj,**kwargs):
-                obj.to_hdf(self.path, key,**kwargs)
-                return read_hdf(self.path, key)
+                obj.to_hdf(path, key,**kwargs)
+                return read_hdf(path, key)
 
             o = tm.makeTimeSeries()
             assert_series_equal(o, roundtrip('series',o))
@@ -213,12 +219,12 @@ class TestHDFStore(tm.TestCase):
 
             # table
             df = DataFrame(dict(A=lrange(5), B=lrange(5)))
-            df.to_hdf(self.path,'table',append=True)
-            result = read_hdf(self.path, 'table', where = ['index>2'])
+            df.to_hdf(path,'table',append=True)
+            result = read_hdf(path, 'table', where = ['index>2'])
             assert_frame_equal(df[df.index>2],result)
 
         finally:
-            safe_remove(self.path)
+            safe_remove(path)
 
     def test_long_strings(self):
 
@@ -397,7 +403,7 @@ class TestHDFStore(tm.TestCase):
             df['datetime1']  = datetime.datetime(2001,1,2,0,0)
             df['datetime2']  = datetime.datetime(2001,1,3,0,0)
             df.ix[3:6,['obj1']] = np.nan
-            df = df.consolidate().convert_objects()
+            df = df.consolidate().convert_objects(datetime=True)
 
             warnings.filterwarnings('ignore', category=PerformanceWarning)
             store['df'] = df
@@ -722,7 +728,7 @@ class TestHDFStore(tm.TestCase):
         df['datetime1'] = datetime.datetime(2001, 1, 2, 0, 0)
         df['datetime2'] = datetime.datetime(2001, 1, 3, 0, 0)
         df.ix[3:6, ['obj1']] = np.nan
-        df = df.consolidate().convert_objects()
+        df = df.consolidate().convert_objects(datetime=True)
 
         with ensure_clean_store(self.path) as store:
             _maybe_remove(store, 'df')
@@ -1033,6 +1039,28 @@ class TestHDFStore(tm.TestCase):
             store.append('df2', df[:10], dropna=False)
             store.append('df2', df[10:], dropna=False)
             tm.assert_frame_equal(store['df2'], df)
+
+        # Test to make sure defaults are to not drop. 
+        # Corresponding to Issue 9382
+        df_with_missing = DataFrame({'col1':[0, np.nan, 2], 'col2':[1, np.nan,  np.nan]})
+
+        with ensure_clean_path(self.path) as path:
+            df_with_missing.to_hdf(path, 'df_with_missing', format = 'table')
+            reloaded = read_hdf(path, 'df_with_missing')
+            tm.assert_frame_equal(df_with_missing, reloaded)
+
+        matrix = [[[np.nan, np.nan, np.nan],[1,np.nan,np.nan]],
+            [[np.nan, np.nan, np.nan], [np.nan,5,6]],
+            [[np.nan, np.nan, np.nan],[np.nan,3,np.nan]]]
+
+        panel_with_missing = Panel(matrix, items=['Item1', 'Item2','Item3'],
+                   major_axis=[1,2],
+                   minor_axis=['A', 'B', 'C'])
+
+        with ensure_clean_path(self.path) as path:
+           panel_with_missing.to_hdf(path, 'panel_with_missing', format='table')
+           reloaded_panel = read_hdf(path, 'panel_with_missing') 
+           tm.assert_panel_equal(panel_with_missing, reloaded_panel)
 
     def test_append_frame_column_oriented(self):
 
@@ -1375,7 +1403,7 @@ class TestHDFStore(tm.TestCase):
             df_dc.ix[7:9, 'string'] = 'bar'
             df_dc['string2'] = 'cool'
             df_dc['datetime'] = Timestamp('20010102')
-            df_dc = df_dc.convert_objects()
+            df_dc = df_dc.convert_objects(datetime=True)
             df_dc.ix[3:5, ['A', 'B', 'datetime']] = np.nan
 
             _maybe_remove(store, 'df_dc')
@@ -1497,107 +1525,6 @@ class TestHDFStore(tm.TestCase):
             store.put('f2', df)
             self.assertRaises(TypeError, store.create_table_index, 'f2')
 
-    def test_big_table_frame(self):
-        raise nose.SkipTest('no big table frame')
-
-        # create and write a big table
-        df = DataFrame(np.random.randn(2000 * 100, 100), index=range(
-            2000 * 100), columns=['E%03d' % i for i in range(100)])
-        for x in range(20):
-            df['String%03d' % x] = 'string%03d' % x
-
-        import time
-        x = time.time()
-        with ensure_clean_store(self.path,mode='w') as store:
-            store.append('df', df)
-            rows = store.root.df.table.nrows
-            recons = store.select('df')
-            assert isinstance(recons, DataFrame)
-
-        com.pprint_thing("\nbig_table frame [%s] -> %5.2f" % (rows, time.time() - x))
-
-    def test_big_table2_frame(self):
-        # this is a really big table: 1m rows x 60 float columns, 20 string, 20 datetime
-        # columns
-        raise nose.SkipTest('no big table2 frame')
-
-        # create and write a big table
-        com.pprint_thing("\nbig_table2 start")
-        import time
-        start_time = time.time()
-        df = DataFrame(np.random.randn(1000 * 1000, 60), index=range(int(
-            1000 * 1000)), columns=['E%03d' % i for i in range(60)])
-        for x in range(20):
-            df['String%03d' % x] = 'string%03d' % x
-        for x in range(20):
-            df['datetime%03d' % x] = datetime.datetime(2001, 1, 2, 0, 0)
-
-        com.pprint_thing("\nbig_table2 frame (creation of df) [rows->%s] -> %5.2f"
-              % (len(df.index), time.time() - start_time))
-
-        def f(chunksize):
-            with ensure_clean_store(self.path,mode='w') as store:
-                store.append('df', df, chunksize=chunksize)
-                r = store.root.df.table.nrows
-                return r
-
-        for c in [10000, 50000, 250000]:
-            start_time = time.time()
-            com.pprint_thing("big_table2 frame [chunk->%s]" % c)
-            rows = f(c)
-            com.pprint_thing("big_table2 frame [rows->%s,chunk->%s] -> %5.2f"
-                             % (rows, c, time.time() - start_time))
-
-    def test_big_put_frame(self):
-        raise nose.SkipTest('no big put frame')
-
-        com.pprint_thing("\nbig_put start")
-        import time
-        start_time = time.time()
-        df = DataFrame(np.random.randn(1000 * 1000, 60), index=range(int(
-            1000 * 1000)), columns=['E%03d' % i for i in range(60)])
-        for x in range(20):
-            df['String%03d' % x] = 'string%03d' % x
-        for x in range(20):
-            df['datetime%03d' % x] = datetime.datetime(2001, 1, 2, 0, 0)
-
-        com.pprint_thing("\nbig_put frame (creation of df) [rows->%s] -> %5.2f"
-              % (len(df.index), time.time() - start_time))
-
-        with ensure_clean_store(self.path, mode='w') as store:
-            start_time = time.time()
-            store = HDFStore(self.path, mode='w')
-            store.put('df', df)
-
-            com.pprint_thing(df.get_dtype_counts())
-            com.pprint_thing("big_put frame [shape->%s] -> %5.2f"
-                  % (df.shape, time.time() - start_time))
-
-    def test_big_table_panel(self):
-        raise nose.SkipTest('no big table panel')
-
-        # create and write a big table
-        wp = Panel(
-            np.random.randn(20, 1000, 1000), items=['Item%03d' % i for i in range(20)],
-            major_axis=date_range('1/1/2000', periods=1000), minor_axis=['E%03d' % i for i in range(1000)])
-
-        wp.ix[:, 100:200, 300:400] = np.nan
-
-        for x in range(100):
-            wp['String%03d'] = 'string%03d' % x
-
-        import time
-        x = time.time()
-
-
-        with ensure_clean_store(self.path, mode='w') as store:
-            store.append('wp', wp)
-            rows = store.root.wp.table.nrows
-            recons = store.select('wp')
-            assert isinstance(recons, Panel)
-
-        com.pprint_thing("\nbig_table panel [%s] -> %5.2f" % (rows, time.time() - x))
-
     def test_append_diff_item_order(self):
 
         wp = tm.makePanel()
@@ -1692,9 +1619,10 @@ class TestHDFStore(tm.TestCase):
 
             # series
             _maybe_remove(store, 's')
-            s = Series(np.zeros(12), index=make_index(['date',None,None]))
+            s = Series(np.zeros(12), index=make_index(['date', None, None]))
             store.append('s',s)
-            tm.assert_series_equal(store.select('s'),s)
+            xp = Series(np.zeros(12), index=make_index(['date', 'level_1', 'level_2']))
+            tm.assert_series_equal(store.select('s'), xp)
 
             # dup with column
             _maybe_remove(store, 'df')
@@ -1937,7 +1865,7 @@ class TestHDFStore(tm.TestCase):
         df['datetime1'] = datetime.datetime(2001, 1, 2, 0, 0)
         df['datetime2'] = datetime.datetime(2001, 1, 3, 0, 0)
         df.ix[3:6, ['obj1']] = np.nan
-        df = df.consolidate().convert_objects()
+        df = df.consolidate().convert_objects(datetime=True)
 
         with ensure_clean_store(self.path) as store:
             store.append('df1_mixed', df)
@@ -1993,7 +1921,7 @@ class TestHDFStore(tm.TestCase):
         df['obj1'] = 'foo'
         df['obj2'] = 'bar'
         df['datetime1'] = datetime.date(2001, 1, 2)
-        df = df.consolidate().convert_objects()
+        df = df.consolidate().convert_objects(datetime=True)
 
         with ensure_clean_store(self.path) as store:
             # this fails because we have a date in the object block......
@@ -2164,9 +2092,8 @@ class TestHDFStore(tm.TestCase):
         # GH2852
         # issue storing datetime.date with a timezone as it resets when read back in a new timezone
 
-        import platform
-        if platform.system() == "Windows":
-            raise nose.SkipTest("timezone setting not supported on windows")
+        # timezone setting not supported on windows
+        tm._skip_if_windows()
 
         import datetime
         import time
@@ -3711,7 +3638,7 @@ class TestHDFStore(tm.TestCase):
 
             # invert ok for filters
             result = store.select('df', "~(columns=['A','B'])")
-            expected = df.loc[:,df.columns-['A','B']]
+            expected = df.loc[:,df.columns.difference(['A','B'])]
             tm.assert_frame_equal(result, expected)
 
             # in
@@ -3863,7 +3790,7 @@ class TestHDFStore(tm.TestCase):
             # valid
             result = store.select_column('df', 'index')
             tm.assert_almost_equal(result.values, Series(df.index).values)
-            self.assertIsInstance(result,Series)
+            self.assertIsInstance(result, Series)
 
             # not a data indexable column
             self.assertRaises(
@@ -3902,6 +3829,14 @@ class TestHDFStore(tm.TestCase):
 
             result = store.select_column('df3', 'string', start=-2, stop=2)
             tm.assert_almost_equal(result.values, df3['string'].values[-2:2])
+
+            # GH 10392 - make sure column name is preserved
+            df4 = DataFrame({'A': np.random.randn(10), 'B': 'foo'})
+            store.append('df4', df4, data_columns=True)
+            expected = df4['B']
+            result = store.select_column('df4', 'B')
+            tm.assert_series_equal(result, expected)
+
 
     def test_coordinates(self):
         df = tm.makeTimeDataFrame()
@@ -4427,16 +4362,17 @@ class TestHDFStore(tm.TestCase):
         df = tm.makeDataFrame()
 
         try:
-            st = HDFStore(self.path)
+            path = create_tempfile(self.path)
+            st = HDFStore(path)
             st.append('df', df, data_columns = ['A'])
             st.close()
-            do_copy(f = self.path)
-            do_copy(f = self.path, propindexes = False)
+            do_copy(f = path)
+            do_copy(f = path, propindexes = False)
         finally:
-            safe_remove(self.path)
+            safe_remove(path)
 
     def test_legacy_table_write(self):
-        raise nose.SkipTest("skipping for now")
+        raise nose.SkipTest("cannot write legacy tables")
 
         store = HDFStore(tm.get_data_path('legacy_hdf/legacy_table_%s.h5' % pandas.__version__), 'a')
 
@@ -4593,10 +4529,15 @@ class TestHDFStore(tm.TestCase):
 
         with ensure_clean_store(self.path) as store:
 
-            s = Series(Categorical(['a', 'b', 'b', 'a', 'a', 'c'], categories=['a','b','c','d']))
-
+            # basic
+            s = Series(Categorical(['a', 'b', 'b', 'a', 'a', 'c'], categories=['a','b','c','d'], ordered=False))
             store.append('s', s, format='table')
             result = store.select('s')
+            tm.assert_series_equal(s, result)
+
+            s = Series(Categorical(['a', 'b', 'b', 'a', 'a', 'c'], categories=['a','b','c','d'], ordered=True))
+            store.append('s_ordered', s, format='table')
+            result = store.select('s_ordered')
             tm.assert_series_equal(s, result)
 
             df = DataFrame({"s":s, "vals":[1,2,3,4,5,6]})
@@ -4639,6 +4580,10 @@ class TestHDFStore(tm.TestCase):
             result = store.select('df3', where = ['s in ["b","c"]'])
             tm.assert_frame_equal(result, expected)
 
+            expected = df[df.s.isin(['b','c'])]
+            result = store.select('df3', where = ['s = ["b","c"]'])
+            tm.assert_frame_equal(result, expected)
+
             expected = df[df.s.isin(['d'])]
             result = store.select('df3', where = ['s in ["d"]'])
             tm.assert_frame_equal(result, expected)
@@ -4676,8 +4621,291 @@ class TestHDFStore(tm.TestCase):
 
             df.to_hdf(path, 'df', format='table')
             other = read_hdf(path, 'df')
-            tm.assert_frame_equal(df, other)
 
+            tm.assert_frame_equal(df, other)
+            self.assertTrue(df.equals(other))
+            self.assertTrue(other.equals(df))
+
+    def test_round_trip_equals(self):
+        # GH 9330
+        df = DataFrame({"B": [1,2], "A": ["x","y"]})
+
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df', format='table')
+            other = read_hdf(path, 'df')
+            tm.assert_frame_equal(df, other)
+            self.assertTrue(df.equals(other))
+            self.assertTrue(other.equals(df))
+
+    def test_preserve_timedeltaindex_type(self):
+        # GH9635
+        # Storing TimedeltaIndexed DataFrames in fixed stores did not preserve
+        # the type of the index.
+        df = DataFrame(np.random.normal(size=(10,5)))
+        df.index = timedelta_range(start='0s',periods=10,freq='1s',name='example')
+
+        with ensure_clean_store(self.path) as store:
+
+            store['df'] = df
+            assert_frame_equal(store['df'], df)
+
+    def test_colums_multiindex_modified(self):
+        # BUG: 7212
+        # read_hdf store.select modified the passed columns parameters
+        # when multi-indexed.
+
+        df = DataFrame(np.random.rand(4, 5),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+        df.index.name = 'letters'
+        df = df.set_index(keys='E', append=True)
+
+        data_columns = df.index.names+df.columns.tolist()
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df',
+                      mode='a',
+                      append=True,
+                      data_columns=data_columns,
+                      index=False)
+            cols2load = list('BCD')
+            cols2load_original = list(cols2load)
+            df_loaded = read_hdf(path, 'df', columns=cols2load)
+            self.assertTrue(cols2load_original == cols2load)
+
+    def test_to_hdf_with_object_column_names(self):
+        # GH9057
+        # Writing HDF5 table format should only work for string-like
+        # column types
+
+        types_should_fail = [ tm.makeIntIndex, tm.makeFloatIndex,
+                                tm.makeDateIndex, tm.makeTimedeltaIndex,
+                                tm.makePeriodIndex ]
+        types_should_run = [ tm.makeStringIndex, tm.makeCategoricalIndex ]
+
+        if compat.PY3:
+            types_should_run.append(tm.makeUnicodeIndex)
+        else:
+            types_should_fail.append(tm.makeUnicodeIndex)
+
+        for index in types_should_fail:
+            df = DataFrame(np.random.randn(10, 2), columns=index(2))
+            with ensure_clean_path(self.path) as path:
+                with self.assertRaises(ValueError,
+                        msg="cannot have non-object label DataIndexableCol"):
+                    df.to_hdf(path, 'df', format='table', data_columns=True)
+
+        for index in types_should_run:
+            df = DataFrame(np.random.randn(10, 2), columns=index(2))
+            with ensure_clean_path(self.path) as path:
+                df.to_hdf(path, 'df', format='table', data_columns=True)
+                result = pd.read_hdf(path, 'df', where="index = [{0}]".format(df.index[0]))
+                assert(len(result))
+
+
+    def test_read_hdf_open_store(self):
+        # GH10330
+        # No check for non-string path_or-buf, and no test of open store
+        df = DataFrame(np.random.rand(4, 5),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+        df.index.name = 'letters'
+        df = df.set_index(keys='E', append=True)
+
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df', mode='w')
+            direct = read_hdf(path, 'df')
+            store = HDFStore(path, mode='r')
+            indirect = read_hdf(store, 'df')
+            tm.assert_frame_equal(direct, indirect)
+            self.assertTrue(store.is_open)
+            store.close()
+
+    def test_read_hdf_iterator(self):
+        df = DataFrame(np.random.rand(4, 5),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+        df.index.name = 'letters'
+        df = df.set_index(keys='E', append=True)
+
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df', mode='w', format='t')
+            direct = read_hdf(path, 'df')
+            iterator = read_hdf(path, 'df', iterator=True)
+            self.assertTrue(isinstance(iterator, TableIterator))
+            indirect = next(iterator.__iter__())
+            tm.assert_frame_equal(direct, indirect)
+            iterator.store.close()
+
+    def test_read_hdf_errors(self):
+        df = DataFrame(np.random.rand(4, 5),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+
+        with ensure_clean_path(self.path) as path:
+            self.assertRaises(IOError, read_hdf, path, 'key')
+            df.to_hdf(path, 'df')
+            store = HDFStore(path, mode='r')
+            store.close()
+            self.assertRaises(IOError, read_hdf, store, 'df')
+            with open(path, mode='r') as store:
+                self.assertRaises(NotImplementedError, read_hdf, store, 'df')
+
+    def test_invalid_complib(self):
+        df = DataFrame(np.random.rand(4, 5),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+        with ensure_clean_path(self.path) as path:
+            self.assertRaises(ValueError, df.to_hdf, path, 'df', complib='blosc:zlib')
+    # GH10443
+    def test_read_nokey(self):
+        df = DataFrame(np.random.rand(4, 5),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df', mode='a')
+            reread = read_hdf(path)
+            assert_frame_equal(df, reread)
+            df.to_hdf(path, 'df2', mode='a')
+            self.assertRaises(ValueError, read_hdf, path)
+
+
+class TestHDFComplexValues(Base):
+    # GH10447
+    def test_complex_fixed(self):
+        df = DataFrame(np.random.rand(4, 5).astype(np.complex64),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df')
+            reread = read_hdf(path, 'df')
+            assert_frame_equal(df, reread)
+
+        df = DataFrame(np.random.rand(4, 5).astype(np.complex128),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df')
+            reread = read_hdf(path, 'df')
+            assert_frame_equal(df, reread)
+
+    def test_complex_table(self):
+        df = DataFrame(np.random.rand(4, 5).astype(np.complex64),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df', format='table')
+            reread = read_hdf(path, 'df')
+            assert_frame_equal(df, reread)
+
+        df = DataFrame(np.random.rand(4, 5).astype(np.complex128),
+                       index=list('abcd'),
+                       columns=list('ABCDE'))
+
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df', format='table', mode='w')
+            reread = read_hdf(path, 'df')
+            assert_frame_equal(df, reread)
+
+    def test_complex_mixed_fixed(self):
+        complex64 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j], dtype=np.complex64)
+        complex128 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j],
+                              dtype=np.complex128)
+        df = DataFrame({'A': [1, 2, 3, 4],
+                        'B': ['a', 'b', 'c', 'd'],
+                        'C': complex64,
+                        'D': complex128,
+                        'E': [1.0, 2.0, 3.0, 4.0]},
+                       index=list('abcd'))
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df')
+            reread = read_hdf(path, 'df')
+            assert_frame_equal(df, reread)
+
+    def test_complex_mixed_table(self):
+        complex64 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j], dtype=np.complex64)
+        complex128 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j],
+                              dtype=np.complex128)
+        df = DataFrame({'A': [1, 2, 3, 4],
+                        'B': ['a', 'b', 'c', 'd'],
+                        'C': complex64,
+                        'D': complex128,
+                        'E': [1.0, 2.0, 3.0, 4.0]},
+                       index=list('abcd'))
+
+        with ensure_clean_store(self.path) as store:
+            store.append('df', df, data_columns=['A', 'B'])
+            result = store.select('df', where=Term('A>2'))
+            assert_frame_equal(df.loc[df.A > 2], result)
+
+        with ensure_clean_path(self.path) as path:
+            df.to_hdf(path, 'df', format='table')
+            reread = read_hdf(path, 'df')
+            assert_frame_equal(df, reread)
+
+    def test_complex_across_dimensions_fixed(self):
+        complex128 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j])
+        s = Series(complex128, index=list('abcd'))
+        df = DataFrame({'A': s, 'B': s})
+        p = Panel({'One': df, 'Two': df})
+
+        objs = [s, df, p]
+        comps = [tm.assert_series_equal, tm.assert_frame_equal,
+                 tm.assert_panel_equal]
+        for obj, comp in zip(objs, comps):
+            with ensure_clean_path(self.path) as path:
+                obj.to_hdf(path, 'obj', format='fixed')
+                reread = read_hdf(path, 'obj')
+                comp(obj, reread)
+
+    def test_complex_across_dimensions(self):
+        complex128 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j])
+        s = Series(complex128, index=list('abcd'))
+        df = DataFrame({'A': s, 'B': s})
+        p = Panel({'One': df, 'Two': df})
+        p4d = pd.Panel4D({'i': p, 'ii': p})
+
+        objs = [df, p, p4d]
+        comps = [tm.assert_frame_equal, tm.assert_panel_equal,
+                 tm.assert_panel4d_equal]
+        for obj, comp in zip(objs, comps):
+            with ensure_clean_path(self.path) as path:
+                obj.to_hdf(path, 'obj', format='table')
+                reread = read_hdf(path, 'obj')
+                comp(obj, reread)
+
+    def test_complex_indexing_error(self):
+        complex128 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j],
+                              dtype=np.complex128)
+        df = DataFrame({'A': [1, 2, 3, 4],
+                        'B': ['a', 'b', 'c', 'd'],
+                        'C': complex128},
+                       index=list('abcd'))
+        with ensure_clean_store(self.path) as store:
+            self.assertRaises(TypeError, store.append, 'df', df, data_columns=['C'])
+
+    def test_complex_series_error(self):
+        complex128 = np.array([1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j, 1.0 + 1.0j])
+        s = Series(complex128, index=list('abcd'))
+
+        with ensure_clean_path(self.path) as path:
+            self.assertRaises(TypeError, s.to_hdf, path, 'obj', format='t')
+
+        with ensure_clean_path(self.path) as path:
+            s.to_hdf(path, 'obj', format='t', index=False)
+            reread = read_hdf(path, 'obj')
+            tm.assert_series_equal(s, reread)
+
+    def test_complex_append(self):
+        df = DataFrame({'a': np.random.randn(100).astype(np.complex128),
+                        'b': np.random.randn(100)})
+
+        with ensure_clean_store(self.path) as store:
+            store.append('df', df, data_columns=['b'])
+            store.append('df', df)
+            result = store.select('df')
+            assert_frame_equal(pd.concat([df, df], 0), result)
 
 def _test_sort(obj):
     if isinstance(obj, DataFrame):

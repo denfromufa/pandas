@@ -6,15 +6,14 @@ from __future__ import division
 from pandas.compat import (map, zip, range, lrange, lmap, u, OrderedDict,
                            OrderedDefaultdict)
 from pandas import compat
-import sys
 import warnings
 import numpy as np
 from pandas.core.common import (PandasError, _try_sort, _default_index,
-                                _infer_dtype_from_scalar, notnull)
+                                _infer_dtype_from_scalar, notnull, is_list_like)
 from pandas.core.categorical import Categorical
 from pandas.core.index import (Index, MultiIndex, _ensure_index,
                                _get_combined_index)
-from pandas.core.indexing import _maybe_droplevels, _is_list_like
+from pandas.core.indexing import maybe_droplevels
 from pandas.core.internals import (BlockManager,
                                    create_block_manager_from_arrays,
                                    create_block_manager_from_blocks)
@@ -27,14 +26,15 @@ from pandas.util.decorators import (deprecate, Appender, Substitution,
                                     deprecate_kwarg)
 import pandas.core.common as com
 import pandas.core.ops as ops
-import pandas.core.nanops as nanops
 import pandas.computation.expressions as expressions
 from pandas import lib
+from pandas.core.ops import _op_descriptions
+
 
 _shared_doc_kwargs = dict(
     axes='items, major_axis, minor_axis',
     klass="Panel",
-    axes_single_arg="{0,1,2,'items','major_axis','minor_axis'}")
+    axes_single_arg="{0, 1, 2, 'items', 'major_axis', 'minor_axis'}")
 _shared_doc_kwargs['args_transpose'] = ("three positional arguments: each one"
                                         "of\n        %s" %
                                         _shared_doc_kwargs['axes_single_arg'])
@@ -95,8 +95,8 @@ def panel_index(time, panels, names=['time', 'panel']):
                 (1962, 'C')], dtype=object)
     """
     time, panels = _ensure_like_indices(time, panels)
-    time_factor = Categorical.from_array(time)
-    panel_factor = Categorical.from_array(panels)
+    time_factor = Categorical.from_array(time, ordered=True)
+    panel_factor = Categorical.from_array(panels, ordered=True)
 
     labels = [time_factor.codes, panel_factor.codes]
     levels = [time_factor.categories, panel_factor.categories]
@@ -145,7 +145,12 @@ class Panel(NDFrame):
         if dtype is not None:
             dtype = self._validate_dtype(dtype)
 
-        passed_axes = [kwargs.get(a) for a in self._AXIS_ORDERS]
+        passed_axes = [kwargs.pop(a, None) for a in self._AXIS_ORDERS]
+
+        if kwargs:
+            raise TypeError('_init_data() got an unexpected keyword '
+                    'argument "{0}"'.format(list(kwargs.keys())[0]))
+
         axes = None
         if isinstance(data, BlockManager):
             if any(x is not None for x in passed_axes):
@@ -160,6 +165,13 @@ class Panel(NDFrame):
             mgr = self._init_matrix(data, passed_axes, dtype=dtype, copy=copy)
             copy = False
             dtype = None
+        elif lib.isscalar(data) and all(x is not None for x in passed_axes):
+            if dtype is None:
+                dtype, data = _infer_dtype_from_scalar(data)
+            values = np.empty([len(x) for x in passed_axes], dtype=dtype)
+            values.fill(data)
+            mgr = self._init_matrix(values, passed_axes, dtype=dtype, copy=False)
+            copy = False
         else:  # pragma: no cover
             raise PandasError('Panel constructor not properly called!')
 
@@ -227,7 +239,8 @@ class Panel(NDFrame):
             (default). Otherwise if the columns of the values of the passed
             DataFrame objects should be the items (which in the case of
             mixed-dtype data you should do), instead pass 'minor'
-
+        dtype : dtype, default None
+            Data type to force, otherwise infer
 
         Returns
         -------
@@ -253,7 +266,7 @@ class Panel(NDFrame):
     def __getitem__(self, key):
         if isinstance(self._info_axis, MultiIndex):
             return self._getitem_multilevel(key)
-        if not (_is_list_like(key) or isinstance(key, slice)):
+        if not (is_list_like(key) or isinstance(key, slice)):
             return super(Panel, self).__getitem__(key)
         return self.ix[key]
 
@@ -262,7 +275,7 @@ class Panel(NDFrame):
         loc = info.get_loc(key)
         if isinstance(loc, (slice, np.ndarray)):
             new_index = info[loc]
-            result_index = _maybe_droplevels(new_index, key)
+            result_index = maybe_droplevels(new_index, key)
             slices = [loc] + [slice(None) for x in range(
                 self._AXIS_LEN - 1)]
             new_values = self.values[slices]
@@ -471,7 +484,11 @@ class Panel(NDFrame):
             raise TypeError('There must be an argument for each axis, you gave'
                             ' {0} args, but {1} are required'.format(nargs,
                                                                      nreq))
-        takeable = kwargs.get('takeable')
+        takeable = kwargs.pop('takeable', None)
+
+        if kwargs:
+            raise TypeError('get_value() got an unexpected keyword '
+                    'argument "{0}"'.format(list(kwargs.keys())[0]))
 
         if takeable is True:
             lower = self._iget_item_cache(args[0])
@@ -506,7 +523,11 @@ class Panel(NDFrame):
             raise TypeError('There must be an argument for each axis plus the '
                             'value provided, you gave {0} args, but {1} are '
                             'required'.format(nargs, nreq))
-        takeable = kwargs.get('takeable')
+        takeable = kwargs.pop('takeable', None)
+
+        if kwargs:
+            raise TypeError('set_value() got an unexpected keyword '
+                    'argument "{0}"'.format(list(kwargs.keys())[0]))
 
         try:
             if takeable is True:
@@ -607,7 +628,7 @@ class Panel(NDFrame):
         """ don't allow a multi reindex on Panel or above ndim """
         return False
 
-    def dropna(self, axis=0, how='any', inplace=False, **kwargs):
+    def dropna(self, axis=0, how='any', inplace=False):
         """
         Drop 2D from panel, holding passed axis constant
 
@@ -806,7 +827,7 @@ class Panel(NDFrame):
         # xs cannot handle a non-scalar key, so just reindex here
         # if we have a multi-index and a single tuple, then its a reduction (GH 7516)
         if not (isinstance(ax, MultiIndex) and isinstance(key, tuple)):
-            if _is_list_like(key):
+            if is_list_like(key):
                 indexer = {self._get_axis_name(axis): key}
                 return self.reindex(**indexer)
 
@@ -1065,21 +1086,17 @@ class Panel(NDFrame):
 
         return self._construct_return_type(result, axes)
 
-    def _construct_return_type(self, result, axes=None, **kwargs):
+    def _construct_return_type(self, result, axes=None):
         """ return the type for the ndim of the result """
         ndim = getattr(result,'ndim',None)
 
         # need to assume they are the same
         if ndim is None:
             if isinstance(result,dict):
-                ndim = getattr(list(compat.itervalues(result))[0],'ndim',None)
-
-                # a saclar result
-                if ndim is None:
-                    ndim = 0
+                ndim = getattr(list(compat.itervalues(result))[0],'ndim',0)
 
                 # have a dict, so top-level is +1 dim
-                else:
+                if ndim != 0:
                     ndim += 1
 
         # scalar
@@ -1141,6 +1158,14 @@ class Panel(NDFrame):
     def transpose(self, *args, **kwargs):
         return super(Panel, self).transpose(*args, **kwargs)
 
+    @Appender(_shared_docs['fillna'] % _shared_doc_kwargs)
+    def fillna(self, value=None, method=None, axis=None, inplace=False,
+               limit=None, downcast=None, **kwargs):
+        return super(Panel, self).fillna(value=value, method=method,
+                                         axis=axis, inplace=inplace,
+                                         limit=limit, downcast=downcast,
+                                         **kwargs)
+
     def count(self, axis='major'):
         """
         Return number of observations over requested axis.
@@ -1164,13 +1189,17 @@ class Panel(NDFrame):
     @deprecate_kwarg(old_arg_name='lags', new_arg_name='periods')
     def shift(self, periods=1, freq=None, axis='major'):
         """
-        Shift major or minor axis by specified number of leads/lags. Drops
-        periods right now compared with DataFrame.shift
+        Shift index by desired number of periods with an optional time freq.
+        The shifted data will not include the dropped periods and the
+        shifted axis will be smaller than the original. This is different
+        from the behavior of DataFrame.shift()
 
         Parameters
         ----------
-        lags : int
-        axis : {'major', 'minor'}
+        periods : int
+            Number of periods to move, can be positive or negative
+        freq : DateOffset, timedelta, or time rule string, optional
+        axis : {'items', 'major', 'minor'} or {0, 1, 2}
 
         Returns
         -------
@@ -1178,9 +1207,6 @@ class Panel(NDFrame):
         """
         if freq:
             return self.tshift(periods, freq, axis=axis)
-
-        if axis == 'items':
-            raise ValueError('Invalid axis')
 
         return super(Panel, self).slice_shift(periods, axis=axis)
 
@@ -1354,6 +1380,7 @@ class Panel(NDFrame):
                 result[key] = None
 
         axes_dict['data'] = result
+        axes_dict['dtype'] = dtype
         return axes_dict
 
     @staticmethod
@@ -1408,7 +1435,7 @@ Parameters
 ----------
 other : %s or %s""" % (cls._constructor_sliced.__name__, cls.__name__) + """
 axis : {""" + ', '.join(cls._AXIS_ORDERS) + "}" + """
-Axis to broadcast over
+    Axis to broadcast over
 
 Returns
 -------
@@ -1430,8 +1457,36 @@ Returns
                 result = com._fill_zeros(result, x, y, name, fill_zeros)
                 return result
 
-            @Substitution(name)
-            @Appender(_agg_doc)
+            if name in _op_descriptions:
+                op_name = name.replace('__', '')
+                op_desc = _op_descriptions[op_name]
+                if op_desc['reversed']:
+                    equiv = 'other ' + op_desc['op'] + ' panel'
+                else:
+                    equiv = 'panel ' + op_desc['op'] + ' other'
+
+                _op_doc = """
+                %%s of series and other, element-wise (binary operator `%%s`).
+                Equivalent to ``%%s``.
+
+                Parameters
+                ----------
+                other : %s or %s""" % (cls._constructor_sliced.__name__, cls.__name__) + """
+                axis : {""" + ', '.join(cls._AXIS_ORDERS) + "}" + """
+                    Axis to broadcast over
+
+                Returns
+                -------
+                """ + cls.__name__ + """
+
+                See also
+                --------
+                """ + cls.__name__ + ".%s\n"
+                doc = _op_doc % (op_desc['desc'], op_name, equiv, op_desc['reverse'])
+            else:
+                doc = _agg_doc % name
+
+            @Appender(doc)
             def f(self, other, axis=0):
                 return self._combine(other, na_op, axis=axis)
             f.__name__ = name

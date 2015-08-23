@@ -1,7 +1,5 @@
 # pylint: disable-msg=E1101,W0612
 from datetime import datetime, timedelta, tzinfo, date
-import sys
-import os
 import nose
 
 import numpy as np
@@ -81,9 +79,9 @@ class TestTimeZoneSupportPytz(tm.TestCase):
         rng_eastern = rng.tz_convert(self.tzstr('US/Eastern'))
 
         # Values are unmodified
-        self.assert_(np.array_equal(rng.asi8, rng_eastern.asi8))
+        self.assertTrue(np.array_equal(rng.asi8, rng_eastern.asi8))
 
-        self.assert_(self.cmptz(rng_eastern.tz, self.tz('US/Eastern')))
+        self.assertTrue(self.cmptz(rng_eastern.tz, self.tz('US/Eastern')))
 
     def test_utc_to_local_no_modify_explicit(self):
         rng = date_range('3/11/2012', '3/12/2012', freq='H', tz='utc')
@@ -119,7 +117,7 @@ class TestTimeZoneSupportPytz(tm.TestCase):
         rng = date_range('3/10/2012', '3/11/2012', freq='30T')
         converted = rng.tz_localize(self.tz('US/Eastern'))
         expected_naive = rng + offsets.Hour(5)
-        self.assert_(np.array_equal(converted.asi8, expected_naive.asi8))
+        self.assertTrue(np.array_equal(converted.asi8, expected_naive.asi8))
 
         # DST ambiguity, this should fail
         rng = date_range('3/11/2012', '3/12/2012', freq='30T')
@@ -159,8 +157,8 @@ class TestTimeZoneSupportPytz(tm.TestCase):
         result = Timestamp(date(2012, 3, 11), tz=self.tz('US/Eastern'))
 
         expected = Timestamp('3/11/2012', tz=self.tz('US/Eastern'))
-        self.assertEquals(result.hour, expected.hour)
-        self.assertEquals(result, expected)
+        self.assertEqual(result.hour, expected.hour)
+        self.assertEqual(result, expected)
 
     def test_timestamp_to_datetime_tzoffset(self):
         # tzoffset
@@ -181,7 +179,7 @@ class TestTimeZoneSupportPytz(tm.TestCase):
         # spring forward, + "7" hours
         expected = Timestamp('3/11/2012 05:00', tz=self.tzstr('US/Eastern'))
 
-        self.assertEquals(result, expected)
+        self.assertEqual(result, expected)
 
     def test_timedelta_push_over_dst_boundary_explicit(self):
         # #1389
@@ -238,7 +236,7 @@ class TestTimeZoneSupportPytz(tm.TestCase):
         expected = utc.tz_convert(self.tzstr('US/Eastern'))
         result = utc.astimezone(self.tzstr('US/Eastern'))
         self.assertEqual(expected, result)
-        tm.assert_isinstance(result, Timestamp)
+        tm.assertIsInstance(result, Timestamp)
 
     def test_create_with_tz(self):
         stamp = Timestamp('3/11/2012 05:00', tz=self.tzstr('US/Eastern'))
@@ -332,7 +330,7 @@ class TestTimeZoneSupportPytz(tm.TestCase):
         rng_eastern = rng.tz_convert(self.tzstr('US/Eastern'))
         # test not valid for dateutil timezones.
         # self.assertIn('EDT', repr(rng_eastern[0].tzinfo))
-        self.assert_('EDT' in repr(rng_eastern[0].tzinfo) or 'tzfile' in repr(rng_eastern[0].tzinfo))
+        self.assertTrue('EDT' in repr(rng_eastern[0].tzinfo) or 'tzfile' in repr(rng_eastern[0].tzinfo))
 
     def test_timestamp_tz_convert(self):
         strdates = ['1/1/2012', '3/1/2012', '4/1/2012']
@@ -837,8 +835,8 @@ class TestTimeZoneSupportDateutil(TestTimeZoneSupportPytz):
         return x.replace(tzinfo=tz)
 
     def test_utc_with_system_utc(self):
-        if sys.platform == 'win32':
-            raise nose.SkipTest('Skipped on win32 due to dateutil bug.')
+        # Skipped on win32 due to dateutil bug
+        tm._skip_if_windows()
 
         from pandas.tslib import maybe_get_tz
 
@@ -1045,11 +1043,11 @@ class TestTimeZones(tm.TestCase):
 
         for how in ['inner', 'outer', 'left', 'right']:
             result = left.join(left[:-5], how=how)
-            tm.assert_isinstance(result, DatetimeIndex)
+            tm.assertIsInstance(result, DatetimeIndex)
             self.assertEqual(result.tz, left.tz)
 
             result = left.join(right[:-5], how=how)
-            tm.assert_isinstance(result, DatetimeIndex)
+            tm.assertIsInstance(result, DatetimeIndex)
             self.assertEqual(result.tz.zone, 'UTC')
 
     def test_join_aware(self):
