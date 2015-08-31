@@ -1,4 +1,4 @@
-"""
+﻿"""
 Misc tools for implementing data structures
 """
 
@@ -1587,7 +1587,7 @@ def _clean_interp_method(method, **kwargs):
     return method
 
 
-def interpolate_1d(xvalues, yvalues, method='linear', limit=None,
+def interpolate_1d(xvalues, yvalues, new_x=None, method='linear', limit=None,
                    fill_value=None, bounds_error=False, order=None, **kwargs):
     """
     Logic for the 1-d interpolation.  The result should be 1-d, inputs
@@ -1597,16 +1597,22 @@ def interpolate_1d(xvalues, yvalues, method='linear', limit=None,
     take it as an argumnet.
     """
     # Treat the original, non-scipy methods first.
-
-    invalid = isnull(yvalues)
-    valid = ~invalid
-
-    valid_y = yvalues[valid]
-    valid_x = xvalues[valid]
-    new_x = xvalues[invalid]
+    invalid = None
+    if new_x:
+        # TODO - interp on existing nans in yvalues?
+        valid = notnull(yvalues)
+        valid_y = yvalues[valid]
+        valid_x = xvalues[valid]
+    else:
+        invalid = isnull(yvalues)
+        valid = ~invalid
+        new_x = xvalues[invalid]
+        valid_y = yvalues[valid]
+        valid_x = xvalues[valid]
 
     if method == 'time':
-        if not getattr(xvalues, 'is_all_dates', None):
+        if (not getattr(xvalues, 'is_all_dates', None)) or ((not
+               (getattr(new_x, 'is_all_dates', None)) if not invalid else True)):
         # if not issubclass(xvalues.dtype.type, np.datetime64):
             raise ValueError('time-weighted interpolation only works '
                              'on Series or DataFrames with a '
@@ -1625,25 +1631,30 @@ def interpolate_1d(xvalues, yvalues, method='linear', limit=None,
     xvalues = getattr(xvalues, 'values', xvalues)
     yvalues = getattr(yvalues, 'values', yvalues)
 
-    if limit:
+    # TODO: should 'limit' be valid option if new_x is given
+    # TODO: if yes, then 'invalid' has to be calc.
+    if limit and invalid:
         violate_limit = _interp_limit(invalid, limit)
     if valid.any():
         firstIndex = valid.argmax()
         valid = valid[firstIndex:]
-        invalid = invalid[firstIndex:]
-        result = yvalues.copy()
-        if valid.all():
-            return yvalues
+        if invalid:
+            invalid = invalid[firstIndex:]
+            result = yvalues.copy()
+            if valid.all():
+                return yvalues
     else:
         # have to call np.array(xvalues) since xvalues could be an Index
         # which cant be mutated
-        result = np.empty_like(np.array(xvalues), dtype=np.float64)
+
+        result = np.empty_like(np.array(
+            xvalues if invalid else new_x), dtype=np.float64)
         result.fill(np.nan)
         return result
 
     if method in ['linear', 'time', 'index', 'values']:
         if method in ('values', 'index'):
-            inds = np.asarray(xvalues)
+            inds = np.asarray(xvalues if invalid else new_x)
             # hack for DatetimeIndex, #1646
             if issubclass(inds.dtype.type, np.datetime64):
                 inds = inds.view(np.int64)
@@ -1651,14 +1662,16 @@ def interpolate_1d(xvalues, yvalues, method='linear', limit=None,
             if inds.dtype == np.object_:
                 inds = lib.maybe_convert_objects(inds)
         else:
-            inds = xvalues
+            inds = xvalues if invalid else new_x
 
-        inds = inds[firstIndex:]
-
-        result[firstIndex:][invalid] = np.interp(inds[invalid], inds[valid],
+        if not invalid:
+            result = np.interp(new_x, valid_x, valid_y)
+        else:
+            inds = inds[firstIndex:]
+            result[firstIndex:][invalid] = np.interp(inds[invalid], inds[valid],
                                                  yvalues[firstIndex:][valid])
 
-        if limit:
+        if limit and invalid:
             result[violate_limit] = np.nan
         return result
 
@@ -1666,12 +1679,17 @@ def interpolate_1d(xvalues, yvalues, method='linear', limit=None,
                   'barycentric', 'krogh', 'spline', 'polynomial',
                   'piecewise_polynomial', 'pchip']
     if method in sp_methods:
-        new_x = new_x[firstIndex:]
+        if invalid:
+            new_x = new_x[firstIndex:]
 
-        result[firstIndex:][invalid] = _interpolate_scipy_wrapper(
+        _temp_res = _interpolate_scipy_wrapper(
             valid_x, valid_y, new_x, method=method, fill_value=fill_value,
             bounds_error=bounds_error, order=order, **kwargs)
-        if limit:
+        if invalid:
+            result[firstIndex:][invalid] = _temp_res
+        else:
+            result = _temp_res
+        if limit and invalid:
             result[violate_limit] = np.nan
         return result
 
