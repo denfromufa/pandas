@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import itertools
 import re
 import operator
@@ -745,10 +745,18 @@ class Block(PandasObject):
 
         return [make_block(new_values, placement=self.mgr_locs, fastpath=True)]
 
-    def interpolate(self, method='pad', axis=0, index=None,
+    def interpolate_na(self, inplace=False, **kwargs):
+        return self.interpolate(new_idxs=None, inplace=inplace, **kwargs)
+
+    def interpolate_at(self, new_idxs, **kwargs):
+        #TODO: check dupes, nans, unique idx
+        return self.interpolate(new_idxs=new_idxs,inplace=False,**kwargs)
+
+    def interpolate(self, new_idxs=None, method='pad', axis=0, index=None,
                     values=None, inplace=False, limit=None,
                     fill_value=None, coerce=False, downcast=None, **kwargs):
-
+        if inplace and new_idxs:
+            raise ValueError('inplace=True and new_idxs not empty are incompatible options')
         def check_int_bool(self, inplace):
             # Only FloatBlocks will contain NaNs.
             # timedelta subclasses IntBlock
@@ -785,7 +793,8 @@ class Block(PandasObject):
             r = check_int_bool(self, inplace)
             if r is not None:
                 return r
-            return self._interpolate(method=m,
+            return self._interpolate(new_idxs=new_idxs,
+                                     method=m,
                                      index=index,
                                      values=values,
                                      axis=axis,
@@ -827,7 +836,7 @@ class Block(PandasObject):
                              fastpath=True, placement=self.mgr_locs)]
         return self._maybe_downcast(blocks, downcast)
 
-    def _interpolate(self, method=None, index=None, values=None,
+    def _interpolate(self, new_idxs=None, method=None, index=None, values=None,
                      fill_value=None, axis=0, limit=None,
                      inplace=False, downcast=None, **kwargs):
         """ interpolate using scipy wrappers """
@@ -854,7 +863,7 @@ class Block(PandasObject):
             # process a 1-d slice, returning it
             # should the axis argument be handled below in apply_along_axis?
             # i.e. not an arg to com.interpolate_1d
-            return com.interpolate_1d(index, x, method=method, limit=limit,
+            return com.interpolate_1d(index, x, new_idxs=new_idxs, method=method, limit=limit,
                                       fill_value=fill_value,
                                       bounds_error=False, **kwargs)
 
